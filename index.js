@@ -15,7 +15,7 @@ const app = express();
 const Joi = require("joi");
 
 
-const expireTime = 24 * 60 * 60 * 1000; //expires after 1 day  (hours * minutes * seconds * millis)
+const expireTime = 1 * 60 * 60 * 1000; //expires after 1 hour  (hours * minutes * seconds * millis)
 
 /* secret information section */
 const mongodb_host = process.env.MONGODB_HOST;
@@ -48,21 +48,43 @@ app.use(session({
 }
 ));
 
-app.get('/', (req,res) => {
-    res.send("<h1>Hello World!</h1>");
-});
+app.get('/', (req, res) => {
+    if (req.session.name === undefined) { // user is not logged in
+      var html = `
+        <form action='/signup' method='get'>
+          <button>Sign Up</button>
+        </form>
+        <form action='/login' method='get'>
+          <button>Log In</button>
+        </form>
+      `;
+      res.send(html);
+    } else { // user is logged in
+      var html = `
+        <p>Hello, ${req.session.name}!</p>
+        <form action='/members' method='get'>
+          <button>Go to Members Area</button>
+        </form>
+        <form action='/logout' method='get'>
+          <button>Log Out</button>
+        </form>
+      `;
+      res.send(html);
+    }
+  });
+  
 
 app.get('/nosql-injection', async (req,res) => {
-	var username = req.query.user;
+	var name = req.query.user;
 
-	if (!username) {
+	if (!name) {
 		res.send(`<h3>no user provided - try /nosql-injection?user=name</h3> <h3>or /nosql-injection?user[$ne]=name</h3>`);
 		return;
 	}
-	console.log("user: "+username);
+	console.log("user: "+name);
 
 	const schema = Joi.string().max(20).required();
-	const validationResult = schema.validate(username);
+	const validationResult = schema.validate(name);
 
 	//If we didn't use Joi to validate and check for a valid URL parameter below
 	// we could run our userCollection.find and it would be possible to attack.
@@ -75,32 +97,11 @@ app.get('/nosql-injection', async (req,res) => {
 	   return;
 	}	
 
-	const result = await userCollection.find({username: username}).project({username: 1, password: 1, _id: 1}).toArray();
+	const result = await userCollection.find({name: name}).project({name: 1, password: 1, _id: 1}).toArray();
 
 	console.log(result);
 
-    res.send(`<h1>Hello ${username}</h1>`);
-});
-
-app.get('/about', (req,res) => {
-    var color = req.query.color;
-
-    res.send("<h1 style='color:"+color+";'>Patrick Guichon</h1>");
-});
-
-app.get('/contact', (req,res) => {
-    var missingEmail = req.query.missing;
-    var html = `
-        email address:
-        <form action='/submitEmail' method='post'>
-            <input name='email' type='text' placeholder='email'>
-            <button>Submit</button>
-        </form>
-    `;
-    if (missingEmail) {
-        html += "<br> email is required";
-    }
-    res.send(html);
+    res.send(`<h1>Hello ${name}</h1>`);
 });
 
 app.post('/submitEmail', (req,res) => {
@@ -114,11 +115,12 @@ app.post('/submitEmail', (req,res) => {
 });
 
 
-app.get('/createUser', (req,res) => {
+app.get('/signup', (req,res) => {
     var html = `
     create user
     <form action='/submitUser' method='post'>
-    <input name='username' type='text' placeholder='username'>
+    <input name='name' type='text' placeholder='name'>
+    <input name='email' type='text' placeholder='email'>
     <input name='password' type='password' placeholder='password'>
     <button>Submit</button>
     </form>
@@ -131,7 +133,7 @@ app.get('/login', (req,res) => {
     var html = `
     log in
     <form action='/loggingin' method='post'>
-    <input name='username' type='text' placeholder='username'>
+    <input name='name' type='text' placeholder='name'>
     <input name='password' type='password' placeholder='password'>
     <button>Submit</button>
     </form>
@@ -140,55 +142,82 @@ app.get('/login', (req,res) => {
 });
 
 app.post('/submitUser', async (req,res) => {
-    var username = req.body.username;
+    var name = req.body.name;
     var password = req.body.password;
+    var email = req.body.email;
+
+    if (!name || !email || !password) {
+      var errorMessage = '';
+      if (!name) {
+        errorMessage += 'Please provide a name.';
+      }
+      if (!email) {
+        errorMessage += 'Please provide an email address.';
+      }
+      if (!password) {
+        errorMessage += 'Please provide a password.';
+      }
+      var html = `
+        <p>${errorMessage}</p>
+        <a href="/signup">Try again</a>
+      `;
+      res.send(html);
+      return;
+    }
 
 	const schema = Joi.object(
 		{
-			username: Joi.string().alphanum().max(20).required(),
+			name: Joi.string().alphanum().max(20).required(),
+      email: Joi.string().email().required(),
 			password: Joi.string().max(20).required()
 		});
 	
-	const validationResult = schema.validate({username, password});
+	const validationResult = schema.validate({name, email, password});
 	if (validationResult.error != null) {
 	   console.log(validationResult.error);
-	   res.redirect("/createUser");
+	   res.redirect("/signup");
 	   return;
    }
 
     var hashedPassword = await bcrypt.hash(password, saltRounds);
 	
-	await userCollection.insertOne({username: username, password: hashedPassword});
+	await userCollection.insertOne({name: name, email: email, password: hashedPassword});
 	console.log("Inserted user");
 
-    var html = "successfully created user";
-    res.send(html);
+  req.session.authenticated = true;
+  req.session.name = name;
+  req.session.cookie.maxAge = expireTime;
+  res.redirect('/members');
 });
 
 app.post('/loggingin', async (req,res) => {
-    var username = req.body.username;
+    var name = req.body.name;
     var password = req.body.password;
 
 	const schema = Joi.string().max(20).required();
-	const validationResult = schema.validate(username);
+	const validationResult = schema.validate(name);
 	if (validationResult.error != null) {
 	   console.log(validationResult.error);
 	   res.redirect("/login");
 	   return;
 	}
 
-	const result = await userCollection.find({username: username}).project({username: 1, password: 1, _id: 1}).toArray();
+	const result = await userCollection.find({name: name}).project({name: 1, password: 1, _id: 1}).toArray();
 
 	console.log(result);
 	if (result.length != 1) {
 		console.log("user not found");
-		res.redirect("/login");
+		var html = `
+      <p>User not found.</p>
+      <a href="/login">Try again</a>
+      `;
+    res.send(html);
 		return;
 	}
 	if (await bcrypt.compare(password, result[0].password)) {
 		console.log("correct password");
 		req.session.authenticated = true;
-		req.session.username = username;
+		req.session.name = name;
 		req.session.cookie.maxAge = expireTime;
 
 		res.redirect('/loggedIn');
@@ -196,7 +225,11 @@ app.post('/loggingin', async (req,res) => {
 	}
 	else {
 		console.log("incorrect password");
-		res.redirect("/login");
+		var html = `
+            <p>Invalid email/password combination.</p>
+            <a href="/login">Try again</a>
+        `;
+        res.send(html);
 		return;
 	}
 });
@@ -204,37 +237,29 @@ app.post('/loggingin', async (req,res) => {
 app.get('/loggedin', (req,res) => {
     if (!req.session.authenticated) {
         res.redirect('/login');
+    } else {
+        res.redirect('/members');
     }
+});
+
+app.get('/members', (req, res) => {
+  if (!req.session.authenticated) {
+    res.redirect('/');
+  } else {
+    var name = req.session.name;
     var html = `
-    You are logged in!
+      <p>Hello, ${name}.</p>
+      <a href="/logout">Log out</a>
+      <img src='/image${Math.floor(Math.random() * 3) + 1}.jpg' style='width:250px;'>
     `;
     res.send(html);
+  }
 });
 
 app.get('/logout', (req,res) => {
 	req.session.destroy();
-    var html = `
-    You are logged out.
-    `;
-    res.send(html);
+    res.redirect("/");
 });
-
-
-app.get('/cat/:id', (req,res) => {
-
-    var cat = req.params.id;
-
-    if (cat == 1) {
-        res.send("Fluffy: <img src='/fluffy.gif' style='width:250px;'>");
-    }
-    else if (cat == 2) {
-        res.send("Socks: <img src='/socks.gif' style='width:250px;'>");
-    }
-    else {
-        res.send("Invalid cat id: "+cat);
-    }
-});
-
 
 app.use(express.static(__dirname + "/public"));
 
