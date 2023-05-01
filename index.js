@@ -120,7 +120,7 @@ app.get('/signup', (req,res) => {
     create user
     <form action='/submitUser' method='post'>
     <input name='name' type='text' placeholder='name'>
-    <input name='email' type='text' placeholder='email'>
+    <input name='email' type='email' placeholder='email'>
     <input name='password' type='password' placeholder='password'>
     <button>Submit</button>
     </form>
@@ -133,7 +133,7 @@ app.get('/login', (req,res) => {
     var html = `
     log in
     <form action='/loggingin' method='post'>
-    <input name='name' type='text' placeholder='name'>
+    <input name='email' type='email' placeholder='email'>
     <input name='password' type='password' placeholder='password'>
     <button>Submit</button>
     </form>
@@ -191,18 +191,21 @@ app.post('/submitUser', async (req,res) => {
 });
 
 app.post('/loggingin', async (req,res) => {
-    var name = req.body.name;
+    var email = req.body.email;
     var password = req.body.password;
 
-	const schema = Joi.string().max(20).required();
-	const validationResult = schema.validate(name);
+	const schema = Joi.object({
+    email: Joi.string().email().required(),
+    password: Joi.string().max(20).required()
+  });
+	const validationResult = schema.validate({email, password});
 	if (validationResult.error != null) {
 	   console.log(validationResult.error);
 	   res.redirect("/login");
 	   return;
 	}
 
-	const result = await userCollection.find({name: name}).project({name: 1, password: 1, _id: 1}).toArray();
+	const result = await userCollection.find({email: email}).project({name: 1, password: 1, _id: 1}).toArray();
 
 	console.log(result);
 	if (result.length != 1) {
@@ -217,7 +220,7 @@ app.post('/loggingin', async (req,res) => {
 	if (await bcrypt.compare(password, result[0].password)) {
 		console.log("correct password");
 		req.session.authenticated = true;
-		req.session.name = name;
+		req.session.name = result[0].name;
 		req.session.cookie.maxAge = expireTime;
 
 		res.redirect('/loggedIn');
